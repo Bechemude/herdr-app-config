@@ -22,6 +22,8 @@
     "cmd-shift-d": "pane.split:down",
     "cmd-shift-w": "pane.close",
     "cmd-shift-enter": "pane.zoom",
+    "cmd-shift-e": "my-tabs.files",
+    "cmd-shift-g": "my-tabs.changes",
     "cmd-shift-m": "pane-dock.minimize",
     "cmd-alt-left": "pane.go:left",
     "cmd-alt-right": "pane.go:right",
