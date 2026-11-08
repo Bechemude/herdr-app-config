@@ -4,7 +4,10 @@
 // Restore  = `terminal.keep {place: "right"}` (a pane again, beside the focused one).
 //
 // Which terminals were minimized, and from which tab, lives in shared("pane-dock"):
-//   { [terminal address]: { tab, space, at } }
+//   { [terminal address]: { tab, space, at, parked?, restoring? } }
+// park and keep finish in the background: the pane stays on screen until herdr-core
+// replies. So a fresh record whose terminal is still in a pane is "pending", not done,
+// and a second park/keep on it would fail ("already has a pane change in progress").
 // The pane header (my-pane) writes the same record when its minimize button is clicked.
 //
 // Keys: "pane-dock.minimize" minimizes the focused pane (bound in keys.json).
@@ -18,6 +21,8 @@ import {
 } from "herdr";
 
 const KEY = "pane-dock";
+// How long a park or keep may take before we treat it as failed.
+const PENDING_MS = 15000;
 
 function minimized() {
   const m = shared(KEY);
@@ -41,6 +46,8 @@ export function minimizePane(paneId) {
     notify({ title: "Can't minimize the last pane", body: "A tab needs at least one pane on screen.", level: "warning", timeout: 3000 });
     return;
   }
+  const r = minimized()[p.terminal];
+  if (r && !r.parked && Date.now() - r.at < PENDING_MS) return; // already being minimized
   setShared(KEY, { ...minimized(), [p.terminal]: { tab: p.tab, space: where.space.id, at: Date.now() } });
   run("terminal.park", { terminal: p.terminal });
 }
@@ -74,19 +81,41 @@ export default class PaneDock extends View {
     });
   }
 
+  // Keep the record until the pane is really back (prune drops it then), so a failed
+  // keep brings the chip back instead of losing the terminal.
   restore(address) {
-    const { [address]: _gone, ...rest } = minimized();
-    setShared(KEY, rest);
+    const m = minimized();
+    const r = m[address];
+    if (!r || (r.restoring && Date.now() - r.restoring < PENDING_MS)) return;
+    setShared(KEY, { ...m, [address]: { ...r, restoring: Date.now() } });
     run("terminal.keep", { terminal: address, place: "right" });
   }
 
-  // Drop records whose terminal is back in a pane or has ended.
+  // Bring records up to date with what Herdr shows:
+  // - terminal ended: drop it;
+  // - out of its pane: the park is done (parked);
+  // - in a pane after being parked: restored (here or elsewhere): drop it;
+  // - in a pane, never parked: the park is still pending; after PENDING_MS it failed: drop it.
   // Skip while terminals() is still empty (app starting), so nothing is lost.
   prune(m, live) {
     if (live.size === 0) return m;
     const inPane = new Set(panes().map((p) => p.terminal).filter(Boolean));
-    const keep = Object.fromEntries(Object.entries(m).filter(([a]) => live.has(a) && !inPane.has(a)));
-    if (Object.keys(keep).length !== Object.keys(m).length) setShared(KEY, keep);
+    const now = Date.now();
+    let changed = false;
+    const keep = {};
+    for (const [a, r] of Object.entries(m)) {
+      if (!live.has(a)) { changed = true; continue; }
+      if (inPane.has(a)) {
+        if (r.parked || now - r.at >= PENDING_MS) { changed = true; continue; }
+        keep[a] = r;
+      } else if (!r.parked) {
+        keep[a] = { ...r, parked: true };
+        changed = true;
+      } else {
+        keep[a] = r;
+      }
+    }
+    if (changed) setShared(KEY, keep);
     return keep;
   }
 
@@ -125,7 +154,8 @@ export default class PaneDock extends View {
     const m = this.prune(minimized(), new Set(byAddress.keys()));
     const tab = focused()?.tab;
     const here = Object.entries(m)
-      .filter(([a, r]) => r.tab === tab && byAddress.has(a))
+      .filter(([a, r]) => r.tab === tab && r.parked && byAddress.has(a)
+        && !(r.restoring && Date.now() - r.restoring < PENDING_MS))
       .sort((a, b) => a[1].at - b[1].at)
       .map(([a]) => byAddress.get(a));
     if (here.length === 0) return div();

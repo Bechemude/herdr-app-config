@@ -14,7 +14,10 @@ function minimize(p) {
   let space = null;
   for (const s of spaces()) if (s.tabs.some((t) => t.id === p.tab)) space = s.id;
   const m = shared("pane-dock");
-  setShared("pane-dock", { ...(m && typeof m === "object" ? m : {}), [p.terminal]: { tab: p.tab, space, at: Date.now() } });
+  const all = m && typeof m === "object" ? m : {};
+  const r = all[p.terminal];
+  if (r && !r.parked && Date.now() - r.at < 15000) return; // already being minimized (pane-dock's PENDING_MS)
+  setShared("pane-dock", { ...all, [p.terminal]: { tab: p.tab, space, at: Date.now() } });
   run("terminal.park", { terminal: p.terminal });
 }
 
