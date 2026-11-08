@@ -1,0 +1,36 @@
+# Herdr app: track only user config (layouts, keys, settings, mods, themes, programs).
+# Everything below is written or rewritten by Herdr itself (see AGENTS.md "The files").
+
+# Sockets and runtime state
+*.sock
+view.json
+shared.json
+shared.json.corrupt-*
+seen.json
+installed.json
+window.json
+windows.json
+data/
+telemetry/
+
+# Regenerated on every start
+AGENTS.md
+herdr.d.ts
+gpui-kit.d.ts
+frame/
+icons/
+update-notes.json
+update-notes-cache.md
+update-notes-media/
+
+# Generated type copies inside mods
+mods/*/gpui-kit.d.ts
+mods/*/jsconfig.json
+
+# Backups Herdr makes on reset
+*.reset-*
+
+.DS_Store
+
+# Per-layout runtime state
+layouts/.state/
