@@ -10,7 +10,9 @@
 // and a second park/keep on it would fail ("already has a pane change in progress").
 // The pane header (my-pane) writes the same record when its minimize button is clicked.
 //
-// Keys: "pane-dock.minimize" minimizes the focused pane (bound in keys.json).
+// Keys (bound in keys.json): "pane-dock.minimize" minimizes the focused pane;
+// "pane-dock.focus" moves the keyboard to the dock: h/l (or arrows) pick a chip,
+// Enter restores it, Escape goes back to the pane you came from.
 // Only terminal panes can be minimized, and never the last pane of a tab.
 
 import { View, div, svg, image } from "gpui-kit";
@@ -69,26 +71,82 @@ function label(term) {
 
 export default class PaneDock extends View {
   init(_props, cx) {
+    this.handle = cx.focus_handle();
+    this.active = false; // keyboard mode: a chip is selected
+    this.held = false;   // the handle got the keyboard at least once in this mode
+    this.at = 0;         // selected chip
+    this.back = null;    // pane to return to on Escape
+    this.chips = [];     // terminals shown on the last render
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
         if (c === "minimize") {
           const f = focused();
           if (f?.pane) minimizePane(f.pane);
+        } else if (c === "focus") {
+          this.enter();
         }
         cx.notify();
       }
     });
   }
 
+  enter() {
+    if (this.chips.length === 0) {
+      notify({ title: "No minimized panes", body: "Nothing in the dock for this tab.", level: "info", timeout: 2000 });
+      return;
+    }
+    if (!this.active) this.back = focused()?.pane ?? null;
+    this.active = true;
+    this.held = false;
+    this.at = Math.min(this.at, this.chips.length - 1);
+    this.handle.focus();
+  }
+
+  leave() {
+    this.active = false;
+    this.held = false;
+  }
+
+  key(e, cx) {
+    if (!this.active) return;
+    const n = this.chips.length;
+    const k = e.keystroke;
+    if (k === "h" || k === "k" || k === "left" || k === "up") this.at = (this.at + n - 1) % n;
+    else if (k === "l" || k === "j" || k === "right" || k === "down") this.at = (this.at + 1) % n;
+    else if (k === "enter" || k === "space") {
+      const term = this.chips[this.at];
+      this.leave();
+      if (term) this.restore(term.address, cx);
+    } else if (k === "escape") {
+      this.leave();
+      const tab = focused()?.tab;
+      const back = panes().find((p) => p.pane === this.back) ?? panes().find((p) => p.tab === tab);
+      if (back) run("pane.focus", { pane: back.pane });
+    } else return;
+    cx.stop_propagation();
+    cx.notify();
+  }
+
+  // After a keyboard restore, focus the pane once it's back.
+  focusWhenBack(address, cx, tries = 30) {
+    cx.timer.after(100, (cx) => {
+      if (panes().some((p) => p.terminal === address)) run("pane.focus", { terminal: address });
+      else if (tries > 1) this.focusWhenBack(address, cx, tries - 1);
+    });
+  }
+
   // Keep the record until the pane is really back (prune drops it then), so a failed
   // keep brings the chip back instead of losing the terminal.
-  restore(address) {
+  restore(address, cx) {
     const m = minimized();
     const r = m[address];
     if (!r || (r.restoring && Date.now() - r.restoring < PENDING_MS)) return;
     setShared(KEY, { ...m, [address]: { ...r, restoring: Date.now() } });
+    // From the keyboard, keep it beside the pane you came from, then focus it.
+    if (cx && this.back && panes().some((p) => p.pane === this.back)) run("pane.focus", { pane: this.back });
     run("terminal.keep", { terminal: address, place: "right" });
+    if (cx) this.focusWhenBack(address, cx);
   }
 
   // Bring records up to date with what Herdr shows:
@@ -119,7 +177,7 @@ export default class PaneDock extends View {
     return keep;
   }
 
-  chip(t, term, vertical) {
+  chip(t, term, vertical, selected) {
     const st = term.report?.status ?? term.status;
     const name = label(term);
     const pic = icon(term.program, 14, t.dim);
@@ -132,14 +190,15 @@ export default class PaneDock extends View {
       .flex_none()
       .when(!vertical, (el) => el.max_w(200))
       .rounded(13)
-      .bg(t.raised)
-      .border(1)
-      .border_color(st === "blocked" ? t.blocked : t.border)
+      .bg(selected ? t.selected : t.raised)
+      .border(selected ? 2 : 1)
+      .border_color(selected ? t.accent : st === "blocked" ? t.blocked : t.border)
       .text_size(12)
       .text_color(t.foreground)
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => { cx.stop_propagation(); this.restore(term.address); })
+      .shadow_md()
       .when(Boolean(pic), (el) => el.child(pic))
       .child(div().truncate().child(name))
       .when(st === "working", (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(11).flex_none().text_color(t.working).spin(900)))
@@ -158,14 +217,26 @@ export default class PaneDock extends View {
         && !(r.restoring && Date.now() - r.restoring < PENDING_MS))
       .sort((a, b) => a[1].at - b[1].at)
       .map(([a]) => byAddress.get(a));
-    if (here.length === 0) return div();
+    this.chips = here;
+    // Leave keyboard mode when the keyboard went elsewhere (a click on a pane).
+    if (this.active) {
+      if (this.handle.is_focused()) this.held = true;
+      else if (this.held) this.leave();
+    }
+    if (here.length === 0) {
+      this.leave();
+      return div().track_focus(this.handle);
+    }
+    this.at = Math.min(this.at, here.length - 1);
 
     const vertical = Boolean(placement()?.vertical);
     const row = vertical ? v_flex() : h_flex();
     return row
       .id("pane-dock")
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => this.key(e, cx))
       .p(4)
       .gap(4)
-      .children(here.map((term) => this.chip(t, term, vertical)));
+      .children(here.map((term, i) => this.chip(t, term, vertical, this.active && i === this.at)));
   }
 }

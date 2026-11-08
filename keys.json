@@ -25,6 +25,7 @@
     "cmd-shift-e": "my-tabs.files",
     "cmd-shift-g": "my-tabs.changes",
     "cmd-shift-m": "pane-dock.minimize",
+    "cmd-shift-j": "pane-dock.focus",
     "cmd-alt-left": "pane.go:left",
     "cmd-alt-right": "pane.go:right",
     "cmd-alt-up": "pane.go:up",
