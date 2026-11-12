@@ -201,7 +201,7 @@ export default class PaneDock extends View {
       .shadow_md()
       .when(Boolean(pic), (el) => el.child(pic))
       .child(div().truncate().child(name))
-      .when(st === "working", (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(11).flex_none().text_color(t.working).spin(900)))
+      .when(st === "working", (el) => el.child(div().flex_none().text_size(14).text_color(t.working).frames(["⠋", "⠹", "⠼", "⠦", "⠇"], 160)))
       .when(st === "blocked", (el) => el.child(div().size(7).flex_none().rounded(4).bg(t.blocked)))
       .when(st === "done", (el) => el.child(div().size(7).flex_none().rounded(4).bg(t.done)));
   }
